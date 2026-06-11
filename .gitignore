@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+*.joblib
+mlruns/
+data/raw/
+data/processed/
+data/warehouse.db
+model/artifacts/*.joblib
+*.png
+
+# Node.js
+node_modules/
+.env
+dist/
+build/
+coverage/
+*.log
+
+# Misc
+.DS_Store
+.idea/
+.vscode/
+*.swp
