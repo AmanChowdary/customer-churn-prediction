@@ -145,9 +145,43 @@ def plot_shap(model, X_test, output_dir):
         print("  ⚠ SHAP not installed — skipping explainability plots.")
         return
     print("  Computing SHAP values...")
-    explainer = shap.TreeExplainer(model)
     sample = X_test.sample(min(500, len(X_test)), random_state=42)
-    shap_values = explainer.shap_values(sample)
+    try:
+        # Try TreeExplainer with the sklearn wrapper directly
+        explainer = shap.TreeExplainer(model)
+        shap_values = explainer.shap_values(sample)
+    except (ValueError, TypeError):
+        try:
+            # Fallback: save/reload booster to reset internal state (fixes XGBoost 2.x / SHAP compat)
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+                tmp_path = f.name
+            model.save_model(tmp_path)
+            import xgboost as xgb_mod
+            booster = xgb_mod.Booster()
+            booster.load_model(tmp_path)
+            explainer = shap.TreeExplainer(booster)
+            shap_values = explainer.shap_values(sample)
+            os.unlink(tmp_path)
+        except Exception:
+            # Final fallback: use XGBoost native feature importance
+            print("  ⚠ SHAP TreeExplainer unavailable — using XGBoost feature_importances_ instead.")
+            importances = model.feature_importances_
+            top5 = sorted(zip(X_test.columns, importances), key=lambda x: x[1], reverse=True)[:5]
+            print("\n── Top 5 Churn Predictors (XGBoost Gain) ────────────")
+            for rank, (feat, imp) in enumerate(top5, 1):
+                print(f"  {rank}. {feat}: {imp:.4f}")
+            # Plot feature importance bar chart
+            feat_df = pd.DataFrame({"feature": X_test.columns, "importance": importances})
+            feat_df = feat_df.sort_values("importance", ascending=False).head(15)
+            plt.figure(figsize=(10, 6))
+            plt.barh(feat_df["feature"][::-1], feat_df["importance"][::-1], color="#2E75B6")
+            plt.xlabel("Importance (Gain)")
+            plt.title("Top 15 Churn Predictors — Feature Importance")
+            plt.tight_layout()
+            plt.savefig(f"{output_dir}/shap_summary.png", dpi=150, bbox_inches="tight")
+            plt.close()
+            return top5
 
     plt.figure(figsize=(10, 6))
     shap.summary_plot(shap_values, sample, show=False, max_display=15)
@@ -200,12 +234,16 @@ def run_training(data_path="data/customer_churn.csv", model_dir="model/artifacts
 
     # MLflow logging
     if MLFLOW_AVAILABLE:
-        mlflow.set_experiment("customer_churn_prediction")
-        with mlflow.start_run():
-            mlflow.log_params({"n_estimators": 300, "max_depth": 6, "learning_rate": 0.05})
-            mlflow.log_metrics(metrics)
-            mlflow.xgboost.log_model(model, "model")
-            print("  ✓ Logged to MLflow")
+        try:
+            mlflow.set_tracking_uri(f"sqlite:///{os.path.abspath('mlruns/mlflow.db')}")
+            mlflow.set_experiment("customer_churn_prediction")
+            with mlflow.start_run():
+                mlflow.log_params({"n_estimators": 300, "max_depth": 6, "learning_rate": 0.05})
+                mlflow.log_metrics(metrics)
+                mlflow.xgboost.log_model(model, "model")
+                print("  ✓ Logged to MLflow")
+        except Exception as e:
+            print(f"  ⚠ MLflow tracking skipped ({type(e).__name__}: {e})")
 
     return model, metrics
 

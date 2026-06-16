@@ -30,3 +30,8 @@ coverage/
 .idea/
 .vscode/
 *.swp
+
+# MLflow loose files
+mlflow.db
+mlflow.db-journal
+mlruns2/
