@@ -264,7 +264,7 @@ Be specific, warm, and actionable. Do not use jargon or mention SHAP values dire
 
         try:
             message = _claude.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-3-haiku-20240307",
                 max_tokens=300,
                 messages=[{"role": "user", "content": prompt}]
             )
