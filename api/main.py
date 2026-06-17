@@ -1,6 +1,7 @@
 """
 Customer Churn Prediction — FastAPI REST Service
 Serves real-time churn risk scores from the trained XGBoost model.
+Includes /explain endpoint powered by Claude API for plain-English risk explanations.
 """
 import os, json
 from typing import Optional, List
@@ -11,6 +12,20 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 import uvicorn
+
+try:
+    import anthropic
+    CLAUDE_AVAILABLE = bool(os.getenv("ANTHROPIC_API_KEY"))
+    _claude = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY")) if CLAUDE_AVAILABLE else None
+except ImportError:
+    CLAUDE_AVAILABLE = False
+    _claude = None
+
+try:
+    import shap
+    SHAP_AVAILABLE = True
+except ImportError:
+    SHAP_AVAILABLE = False
 
 app = FastAPI(
     title="Customer Churn Prediction API",
@@ -163,6 +178,109 @@ async def model_metrics():
         raise HTTPException(404, "Metrics not found. Train the model first.")
     with open(metrics_path) as f:
         return json.load(f)
+
+class ExplainResponse(BaseModel):
+    customer_id: str
+    churn_probability: float
+    risk_tier: str
+    explanation: str
+    top_risk_factors: List[str]
+    powered_by: str
+
+@app.post("/explain", response_model=ExplainResponse)
+async def explain(customer: CustomerFeatures):
+    """
+    Predict churn risk AND generate a plain-English explanation using Claude.
+    Ideal for surfacing model insights to non-technical stakeholders.
+    """
+    model = load_model()
+    df = pd.DataFrame([customer.dict()])
+    cid = df.pop("customer_id").iloc[0]
+    df_eng = engineer_and_encode(df.copy())
+
+    try:
+        prob = float(model.predict_proba(df_eng)[:, 1][0])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction error: {e}")
+
+    tier = risk_tier(prob)
+    factors = top_risk_factors(customer.dict())
+
+    # ── SHAP feature contributions ────────────────────────────
+    shap_lines = []
+    if SHAP_AVAILABLE:
+        try:
+            explainer = shap.TreeExplainer(model)
+            shap_vals = explainer.shap_values(df_eng)
+            contributions = sorted(
+                zip(df_eng.columns, shap_vals[0]),
+                key=lambda x: abs(x[1]), reverse=True
+            )[:6]
+            shap_lines = [f"  - {feat}: contribution={val:+.3f}" for feat, val in contributions]
+        except Exception:
+            shap_lines = [f"  - {f}" for f in factors]
+    else:
+        shap_lines = [f"  - {f}" for f in factors]
+
+    # ── Call Claude API ───────────────────────────────────────
+    if CLAUDE_AVAILABLE and _claude:
+        customer_summary = (
+            f"tenure={customer.tenure_months} months, "
+            f"contract={customer.contract_type}, "
+            f"monthly_charge=${customer.monthly_charge}, "
+            f"nps_score={customer.nps_score}/10, "
+            f"support_tickets={customer.support_tickets}, "
+            f"login_freq_30d={customer.login_freq_30d}, "
+            f"recency_days={customer.recency_days}, "
+            f"feature_adoption={customer.feature_adoption:.0%}"
+        )
+        prompt = f"""You are a customer success analyst. A machine learning model has flagged a customer as {tier} churn risk with {prob:.0%} probability of churning.
+
+Customer profile: {customer_summary}
+
+Top model signals driving this prediction:
+{chr(10).join(shap_lines)}
+
+Write a concise 3-4 sentence explanation for a non-technical business stakeholder explaining:
+1. Why this customer is at risk (in plain language, referencing the specific signals above)
+2. What the key concern is
+3. One concrete action the team could take to retain them
+
+Be specific, warm, and actionable. Do not use jargon or mention SHAP values directly."""
+
+        try:
+            message = _claude.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=300,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            explanation = message.content[0].text.strip()
+            powered_by = "Claude claude-haiku-4-5-20251001 + XGBoost"
+        except Exception as e:
+            explanation = _fallback_explanation(prob, tier, factors, customer)
+            powered_by = f"XGBoost (Claude unavailable: {type(e).__name__})"
+    else:
+        explanation = _fallback_explanation(prob, tier, factors, customer)
+        powered_by = "XGBoost (set ANTHROPIC_API_KEY to enable Claude explanations)"
+
+    return ExplainResponse(
+        customer_id=cid,
+        churn_probability=round(prob, 4),
+        risk_tier=tier,
+        explanation=explanation,
+        top_risk_factors=factors,
+        powered_by=powered_by,
+    )
+
+def _fallback_explanation(prob: float, tier: str, factors: List[str], customer) -> str:
+    """Rule-based fallback when Claude API key is not set."""
+    factor_str = "; ".join(factors) if factors and factors[0] != "No high-risk signals detected" else "general engagement decline"
+    return (
+        f"This customer has a {prob:.0%} probability of churning, placing them in the {tier} risk category. "
+        f"The main signals driving this prediction are: {factor_str}. "
+        f"With {customer.tenure_months} months of tenure on a {customer.contract_type} contract, "
+        f"early intervention — such as a personalized outreach or contract upgrade offer — could meaningfully reduce churn risk."
+    )
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
