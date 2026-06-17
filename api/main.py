@@ -84,6 +84,18 @@ class BatchRequest(BaseModel):
 # ── Feature Engineering (mirrors train.py) ───────────────────
 
 CATEGORICAL_COLS = ["gender", "region", "plan", "contract_type", "payment_method"]
+
+# Exact feature order the model was trained with (must match train.py)
+FEATURE_COLS = [
+    "age", "tenure_months", "monthly_charge", "total_charges",
+    "num_products", "paperless_billing", "recency_days", "frequency",
+    "monetary_30d", "login_freq_30d", "support_tickets", "nps_score",
+    "avg_session_min", "page_views_30d", "feature_adoption",
+    "gender", "region", "plan", "contract_type", "payment_method",
+    "rfm_score", "charge_per_month", "engagement_score",
+    "support_per_month", "contract_risk", "nps_risk",
+    "lifecycle_stage", "lifecycle_risk", "is_high_value",
+]
 from sklearn.preprocessing import LabelEncoder
 
 def engineer_and_encode(df: pd.DataFrame) -> pd.DataFrame:
@@ -139,6 +151,7 @@ async def predict(customer: CustomerFeatures):
     df = pd.DataFrame([customer.dict()])
     cid = df.pop("customer_id").iloc[0]
     df = engineer_and_encode(df)
+    df = df[[c for c in FEATURE_COLS if c in df.columns]]
 
     try:
         prob = float(model.predict_proba(df)[:, 1][0])
@@ -197,6 +210,7 @@ async def explain(customer: CustomerFeatures):
     df = pd.DataFrame([customer.dict()])
     cid = df.pop("customer_id").iloc[0]
     df_eng = engineer_and_encode(df.copy())
+    df_eng = df_eng[[c for c in FEATURE_COLS if c in df_eng.columns]]
 
     try:
         prob = float(model.predict_proba(df_eng)[:, 1][0])
