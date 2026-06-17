@@ -94,7 +94,7 @@ FEATURE_COLS = [
     "gender", "region", "plan", "contract_type", "payment_method",
     "rfm_score", "charge_per_month", "engagement_score",
     "support_per_month", "contract_risk", "nps_risk",
-    "lifecycle_stage", "lifecycle_risk", "is_high_value",
+    "lifecycle_risk", "is_high_value", "lifecycle_stage",
 ]
 from sklearn.preprocessing import LabelEncoder
 
