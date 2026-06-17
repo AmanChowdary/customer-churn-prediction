@@ -269,10 +269,15 @@ Be specific, warm, and actionable. Do not use jargon or mention SHAP values dire
                 messages=[{"role": "user", "content": prompt}]
             )
             explanation = message.content[0].text.strip()
-            powered_by = "Claude claude-haiku-4-5-20251001 + XGBoost"
+            powered_by = "Claude claude-3-5-haiku-20241022 + XGBoost"
         except Exception as e:
+            # Log full error details to Render logs for debugging
+            err_msg = str(e)
+            err_body = getattr(e, 'body', None) or getattr(e, 'message', None) or ''
+            err_status = getattr(e, 'status_code', 'unknown')
+            print(f"[CLAUDE ERROR] type={type(e).__name__} status={err_status} body={err_body} msg={err_msg[:300]}")
             explanation = _fallback_explanation(prob, tier, factors, customer)
-            powered_by = f"XGBoost (Claude unavailable: {type(e).__name__})"
+            powered_by = f"XGBoost (Claude error {err_status}: {err_body or err_msg[:80]})"
     else:
         explanation = _fallback_explanation(prob, tier, factors, customer)
         powered_by = "XGBoost (set ANTHROPIC_API_KEY to enable Claude explanations)"
